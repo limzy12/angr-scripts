@@ -1,8 +1,10 @@
 ### Python script to find flags for Linux chmod cmd ###
-import angr, claripy, monkeyhex
+import angr, claripy, monkeyhex, sys
 
-def hook_getopt(state):
-    state.regs.eax = SYMB
+class hook_getopt(angr.SimProcedure):
+    def run(self):
+        print('Hooking...')
+        return SYMB
 
 def solve():
 
@@ -10,23 +12,41 @@ def solve():
 
     # Set load options and load binary
     loadOpt = {'main_opts':{'arch':'x86'}}
-    proj = angr.Project('chmod', load_options = loadOpt)
+    proj = angr.Project('chmod', load_options = loadOpt, auto_load_libs = False)
     
-    # Get address to be hooked
-    main_obj = proj.loader.main_object
-    HOOK_ADDR = main_obj.plt['getopt_long']
+    '''
+    # Set up the hook
+    proj.hook_symbol('getopt_long', hook_getopt())
+    '''
 
+    # Find execution start point using CFG
+    cfg = proj.analyses.CFGFast()
+    for addr in list(cfg.kb.functions):
+        if cfg.kb.functions[addr].name == 'getopt_long':
+            GETOPT_ADDR = addr
+            break
+    TARGET_ADDR = cfg.get_any_node(GETOPT_ADDR).predecessors[1].addr
+    
+
+    # Explore the binary
     argv = ['chmod', claripy.BVS('flags', 8)]
-    state = proj.factory.entry_state(args = argv, addr = HOOK_ADDR)
+    state = proj.factory.blank_state(args = argv, remove_options =
+            {angr.options.LAZY_SOLVES}, addr = TARGET_ADDR)
     state.add_constraints(argv[1] >= ' ')
     state.add_constraints(argv[1] <= '~')
     SYMB = argv[1]
-
-    proj.hook(HOOK_ADDR, hook_getopt(state), length = 5)
     
     sim = proj.factory.simgr(state)
-    sim.explore()
+    print("exploring with cmdline args %s from %s" % (argv[1], sim.active))
+    
+    while len(sim.active) == 1:
+        sim.step()
 
-    print(sim.found)
+    print(sim)
+    '''
+    for step in sim.unconstrained[0].history.descriptions:
+        print(step)
+    '''
+
 if __name__ == '__main__':
     solve()
