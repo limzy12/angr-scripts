@@ -4,9 +4,42 @@
 
 import angr, monkeyhex, logging
 
-logging.getLogger('angr').setLevel('DEBUG')
+ # logging.getLogger('angr').setLevel('DEBUG')
 
-proj = angr.Project('./bomb')
-ADDR = proj.loader.main_object.plt['phase_2']
+proj = angr.Project('./bomb', auto_load_libs = False)
+cfg = proj.analyses.CFGFast()
+TARGET_ADDR, AVOID_ADDR, FIND_ADDR = 0, 0, 0
 
-print(ADDR)
+for addr in list(cfg.kb.functions):
+    if cfg.kb.functions[addr].name == 'read_six_numbers':
+        TARGET_ADDR = addr
+    elif cfg.kb.functions[addr].name == 'explode_bomb':
+        AVOID_ADDR = addr
+    elif cfg.kb.functions[addr].name == 'phase_defused':
+        FIND_ADDR = addr
+    if TARGET_ADDR and AVOID_ADDR and FIND_ADDR:
+        break
+
+PRED = cfg.get_any_node(TARGET_ADDR).predecessors[1]
+ENTRY_PT = cfg.get_successors(PRED, excluding_fakeret = False)[1].addr
+
+print(hex(ENTRY_PT))
+state = proj.factory.blank_state(addr = ENTRY_PT)
+for i in range(6):
+    state.stack_push(state.solver.BVS('int{}'.format(i), 32))
+
+sim = proj.factory.simgr(state)
+sim.explore(find = 0x400f3c, avoid = AVOID_ADDR)
+# find address has to be precise due to clearing of stack in bin
+
+print(sim)
+FOUND_STATE = sim.found[0]
+answer = []
+
+for i in range(3):
+    solution = FOUND_STATE.solver.eval(FOUND_STATE.stack_pop())
+    # length of pop is architecture word size
+    answer.append(solution & 0xffffffff)
+    answer.append((solution >> 32) & 0xffffffff)
+
+print(answer)
